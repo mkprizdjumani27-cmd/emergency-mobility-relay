@@ -42,6 +42,14 @@ Dependencies: 0 → 1 → (2, 3) → 4 → 5 → 6 → 7. Chunks 2 and 3 are par
 
 **The user greenlights chunks manually — do not start a chunk without being told which one.**
 
+### Session protocol (every session, every chunk)
+
+1. **Kickoff:** user says something like "read AGENT.md, build Chunk N" (or just "next chunk" — resolve N from the status table below).
+2. **Build** the chunk with TDD; run `uv run pytest -q` often.
+3. **Before calling it done:** run the `code-review` skill against the last commit, fix findings.
+4. **Update this file:** flip the chunk's status in the table, append anything learned to KNOWN_ISSUES (including minor quirks — especially wrong assumptions that were proven correct or false).
+5. **Commit** the chunk + this file update together, so `git log` = chunk history.
+
 ## Non-negotiables (from the PRD — these are where drift happens)
 
 - **No transfer hubs. Direct single-leg trips only.** The teammate's hub idea was reduced to a *priority weight* (PRD §5) — nothing more.
