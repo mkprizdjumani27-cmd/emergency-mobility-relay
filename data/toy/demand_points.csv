@@ -1,0 +1,6 @@
+pickup_id,demand_count,vulnerable_count,priority_weight,data_label
+p1,40,5,1.5,simulated
+p2,30,0,1.2,simulated
+p3,8,3,1.8,simulated
+p4,20,0,1.0,manual
+p5,1,1,1.0,manual

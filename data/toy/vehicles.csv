@@ -1,0 +1,5 @@
+vehicle_id,type,capacity,start_node_or_lat_lon,speed_kmh,data_label
+v1,bus,40,n1,30.0,manual
+v2,van,15,n4,40.0,manual
+v3,boat,20,n6,25.0,simulated
+v4,ambulance,2,"17.301,78.419",60.0,simulated

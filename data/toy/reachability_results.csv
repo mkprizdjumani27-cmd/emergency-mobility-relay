@@ -1,0 +1,9 @@
+pickup_id,hospital_id,data_label
+p1,h1,source_derived
+p1,h2,source_derived
+p2,h1,source_derived
+p2,h2,source_derived
+p4,h1,source_derived
+p4,h2,source_derived
+p5,h1,source_derived
+p5,h2,source_derived

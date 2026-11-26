@@ -17,22 +17,26 @@ Context file for AI agents working on this repo. **Goal:** don't drift — pick 
 ```
 SCHEMAS.md, DECISIONS.md      docs (Day-1 contracts)
 pyproject.toml                networkx, pandas, ortools, pytest — uv-managed
+data/toy/                     toy scenario: toy_town.graphml + 6 CSVs + README.md
 vehicle_allocation/
   allocation.py               run_allocation(graph, pickups, vehicles, hospitals, config)
                               → {assignments, routes, unserved, summary}  [stub, body in Ch2-4]
+  models.py                   dataclasses (Vehicle, Pickup, Demand, Hospital, ClosedRoad, ...) + DataLabel
+  loaders.py                  validating loaders → dataclasses; SchemaError on any contract breach
 tests/test_smoke.py           2 passing
+tests/test_loaders.py         Chunk 1 loader tests
 ```
 
-Run: `uv sync` once, then `uv run pytest -q`.
+Run: `uv sync` once, then `uv run pytest -q` (30 passing).
 
 ## Chunk plan — build order & status
 
 | # | Chunk | Status |
 |---|-------|--------|
 | 0 | Scaffold + spec freeze (git, pyproject, SCHEMAS.md, DECISIONS.md, entrypoint contract) | ✅ done, commit `3a03693` |
-| 1 | **Toy dataset + validating loaders** — `data/toy/*` (graphml, closed_roads, pickups, demand, vehicles, hospitals, reachability) + loader that rejects bad columns and preserves `data_label`. Unblocks everything before the real graph arrives | ⬜ next |
-| 2 | Travel-time + best hospital — strip closed roads, NetworkX time per pickup→hospital, nearest wins, `no_route` if unreachable | ⬜ |
-| 3 | CP-SAT allocator — one trip/vehicle, capacity + remaining-demand caps, maximize weighted people served, min-time tiebreak; includes PRD §5 `priority_weight`/`vulnerable_count` (default 1.0/0 → plain version) | ⬜ |
+| 1 | **Toy dataset + validating loaders** — `data/toy/*` (graphml, closed_roads, pickups, demand, vehicles, hospitals, reachability) + loader that rejects bad columns and preserves `data_label`. Unblocks everything before the real graph arrives | ✅ done |
+| 2 | Travel-time + best hospital — strip closed roads, NetworkX time per pickup→hospital, nearest wins, `no_route` if unreachable | ⬜ next (parallel with 3) |
+| 3 | CP-SAT allocator — one trip/vehicle, capacity + remaining-demand caps, maximize weighted people served, min-time tiebreak; includes PRD §5 `priority_weight`/`vulnerable_count` (default 1.0/0 → plain version) | ⬜ next (parallel with 2) |
 | 4 | Routes + output layer — node path + geometry, GeoJSON/CSV, `assignments.csv`, `unserved.csv` (3 reasons), summary | ⬜ |
 | 5 | Acceptance test suite — every PRD §4 criterion as pytest | ⬜ |
 | 6 | Real-data integration — swap toy for `hyderabad_drive.graphml` + real files; clean call for app integrator | ⬜ |
@@ -83,5 +87,10 @@ Format: one row per issue; if unresolved, say what blocks it.
 | 1 | 2026-11-26 | 0 | Git had no global `user.name`/`user.email`; commits use one-off `Uzain <uzain@local>` | Fixed in-session; user should run `git config user.name/user.email` for real authorship |
 | 2 | 2026-11-26 | 0 | PRD's two source PDFs disagree (short version folds demand into pickup points); PRD assumes longer version | Assumed longer version — ⬜ needs one confirmation with the lead |
 | 3 | 2026-11-26 | 0 | `reachability_results.csv` format unknown (Muhammad owns it); assumed per-pair rows | Unconfirmed — allocator's own NetworkX check is authoritative anyway |
+| 4 | 2026-11-26 | 1 | Review: `load_reachability` hard-requires `pickup_id,hospital_id,data_label`, but SCHEMAS allows "per-pair **or** per-pickup summary" (Muhammad's file unconfirmed) | Kept strict — file is cross-check only and a strict parse surfaces ID/column mismatches (PRD §7). Revisit in Ch6 when the real file arrives; see `load_reachability` docstring |
+| 5 | 2026-11-26 | 1 | Review: `load_closed_roads` didn't validate endpoints; now requires `u`,`v` be graph nodes with an edge between them (either direction) | Fixed. Rows are **unordered** — the actual "block both directions" removal is Ch2's job, not the loader's. A closed row naming a road absent from the graph now raises `SchemaError` (intended) |
+| 6 | 2026-11-26 | 1 | Nearest-node resolution is Euclidean on lon/lat degrees (no haversine/CRS) | Fine for the toy's dense grid; revisit in Ch6 if the real graph spans a wide area |
+| 7 | 2026-11-26 | 1 | Review suspected `test_pickup_neither_node_nor_latlon_rejected` passed for the wrong reason (rejected as unknown-column) | Proven **false**: the node/lat-lon form check runs *before* `_check_columns`. Test now pins the branch with `match="either"` |
+| 8 | 2026-11-26 | 1 | `data/toy/README.md` added to record *why* each pickup is placed where it is (which one demonstrates `no_route`, closure-sensitivity, demand-of-1, etc.) | Not an issue — kept so Chunks 2–5 don't have to reverse-engineer the toy's intent |
 
 _(append new rows below; renumber)_
