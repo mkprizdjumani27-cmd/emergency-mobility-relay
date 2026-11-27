@@ -44,8 +44,8 @@ Run: `uv sync` once, then `uv run pytest -q` (53 passing).
 |---|-------|--------|
 | 0 | Scaffold + spec freeze (git, pyproject, SCHEMAS.md, DECISIONS.md, entrypoint contract) | ✅ done, commit `3a03693` |
 | 1 | **Toy dataset + validating loaders** — `data/toy/*` (graphml, closed_roads, pickups, demand, vehicles, hospitals, reachability) + loader that rejects bad columns and preserves `data_label`. Unblocks everything before the real graph arrives | ✅ done, commit `a45993f` |
-| 2 | Travel-time + best hospital — strip closed roads, NetworkX time per pickup→hospital, nearest wins, `no_route` if unreachable | ✅ done |
-| 3 | CP-SAT allocator — one trip/vehicle, capacity + remaining-demand caps, maximize weighted people served, min-time tiebreak; includes PRD §5 `priority_weight`/`vulnerable_count` (default 1.0/0 → plain version) | ⬜ next (parallel with 2) |
+| 2 | Travel-time + best hospital — strip closed roads, NetworkX time per pickup→hospital, nearest wins, `no_route` if unreachable | ✅ done, commit `6510814` |
+| 3 | CP-SAT allocator — one trip/vehicle, capacity + remaining-demand caps, maximize weighted people served, min-time tiebreak; includes PRD §5 `priority_weight`/`vulnerable_count` (default 1.0/0 → plain version) | ⬜ next |
 | 4 | Routes + output layer — node path + geometry, GeoJSON/CSV, `assignments.csv`, `unserved.csv` (3 reasons), summary | ⬜ |
 | 5 | Acceptance test suite — every PRD §4 criterion as pytest | ⬜ |
 | 6 | Real-data integration — swap toy for `hyderabad_drive.graphml` + real files; clean call for app integrator | ⬜ |
