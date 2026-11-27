@@ -227,9 +227,74 @@ def _validate_node(node: str, graph: nx.Graph, *, source: str, where: str) -> No
 # --- loaders ----------------------------------------------------------------
 
 
+# --- graph attribute normalization ----------------------------------------
+# The toy graphml (written by networkx) carries native float/int attributes;
+# OSM graphml (written by osmnx) round-trips *every* attribute as a string.
+# Left alone, edge `length` would be a str on real data and Ch2's travel-time
+# arithmetic would fail there while passing on the toy — the exact toy->real
+# trap. Coerce the attributes we compute on so every graph source yields
+# identical runtime types. Unparseable values are left untouched (never crash
+# the load) so Ch2 can surface them against the right row.
+
+def _coerce_float(v):
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return v
+
+
+def _coerce_int(v):
+    try:
+        f = float(v)
+        return int(f) if f.is_integer() else v
+    except (TypeError, ValueError):
+        return v
+
+
+def _coerce_bool(v):
+    if isinstance(v, bool):
+        return v
+    s = str(v).strip().lower()
+    if s in ("true", "1", "yes"):
+        return True
+    if s in ("false", "0", "no"):
+        return False
+    return v
+
+
+_FLOAT_NODE_ATTRS = ("x", "y")
+_INT_NODE_ATTRS = ("street_count",)
+_FLOAT_EDGE_ATTRS = ("length",)
+_BOOL_EDGE_ATTRS = ("oneway", "reversed")
+
+
+def _normalize_graph(graph: nx.Graph) -> nx.Graph:
+    """Coerce known numeric/bool graph attributes to native types, in place."""
+    for _, attrs in graph.nodes(data=True):
+        for key in _FLOAT_NODE_ATTRS:
+            if key in attrs:
+                attrs[key] = _coerce_float(attrs[key])
+        for key in _INT_NODE_ATTRS:
+            if key in attrs:
+                attrs[key] = _coerce_int(attrs[key])
+
+    if graph.is_multigraph():
+        edge_data = (d for _, _, _, d in graph.edges(keys=True, data=True))
+    else:
+        edge_data = (d for _, _, d in graph.edges(data=True))
+    for attrs in edge_data:
+        for key in _FLOAT_EDGE_ATTRS:
+            if key in attrs:
+                attrs[key] = _coerce_float(attrs[key])
+        for key in _BOOL_EDGE_ATTRS:
+            if key in attrs:
+                attrs[key] = _coerce_bool(attrs[key])
+    return graph
+
+
 def load_graph(path: str | Path) -> nx.Graph:
-    """Read the scenario road graph (GraphML)."""
-    return nx.read_graphml(path)
+    """Read the scenario road graph (GraphML), normalizing attribute types."""
+    return _normalize_graph(nx.read_graphml(path))
 
 
 def _load_node_records(path: str | Path, graph: nx.Graph, *, id_field: str, cls):

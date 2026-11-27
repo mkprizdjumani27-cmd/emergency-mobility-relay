@@ -54,6 +54,36 @@ def test_load_graph_shape(graph):
     assert graph.nodes["n5"]["y"] == pytest.approx(17.31)
 
 
+def test_load_graph_normalizes_string_typed_attributes(tmp_path):
+    # OSM graphml (written by osmnx) round-trips every attribute as a string.
+    # The loader must coerce the ones we compute on, or Ch2's travel-time math
+    # fails on real data while passing on the toy. Written with attr.type
+    # "string" so this genuinely fails without normalization.
+    graphml = """<?xml version="1.0" encoding="UTF-8"?>
+<graphml xmlns="http://graphml.graphdrawing.org/xmlns">
+  <key id="d0" for="node" attr.name="x" attr.type="string"/>
+  <key id="d1" for="node" attr.name="y" attr.type="string"/>
+  <key id="d2" for="node" attr.name="street_count" attr.type="string"/>
+  <key id="d3" for="edge" attr.name="length" attr.type="string"/>
+  <key id="d4" for="edge" attr.name="oneway" attr.type="string"/>
+  <graph id="G" edgedefault="directed">
+    <node id="a"><data key="d0">78.5</data><data key="d1">17.4</data><data key="d2">4</data></node>
+    <node id="b"><data key="d0">78.6</data><data key="d1">17.5</data><data key="d2">3</data></node>
+    <edge source="a" target="b"><data key="d3">120.5</data><data key="d4">True</data></edge>
+  </graph>
+</graphml>
+"""
+    p = tmp_path / "stringly.graphml"
+    p.write_text(graphml)
+    g = load_graph(p)
+    assert isinstance(g.nodes["a"]["x"], float)
+    assert g.nodes["a"]["x"] == pytest.approx(78.5)
+    assert g.nodes["a"]["street_count"] == 4
+    assert isinstance(g.edges["a", "b"]["length"], float)
+    assert g.edges["a", "b"]["length"] == pytest.approx(120.5)
+    assert g.edges["a", "b"]["oneway"] is True
+
+
 def test_load_vehicles_roundtrip(graph):
     vehicles = load_vehicles(TOY / "vehicles.csv", graph)
     by_id = {v.vehicle_id: v for v in vehicles}

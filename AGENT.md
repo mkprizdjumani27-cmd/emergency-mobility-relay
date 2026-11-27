@@ -8,26 +8,30 @@ Context file for AI agents working on this repo. **Goal:** don't drift — pick 
 
 **Source of truth (read in this order):**
 
-1. `PRD Vehicle Allocation Module.md` — the full requirements. This file is authoritative over anything below.
-2. `SCHEMAS.md` — column/ID/`data_label` contract for every input & output file (Status: PROPOSED, circulate Day 1).
-3. `DECISIONS.md` — open questions for the lead, each with a proposed default.
+1. `docs/PRD Vehicle Allocation Module.md` — the full requirements. This file is authoritative over anything below.
+2. `docs/SCHEMAS.md` — column/ID/`data_label` contract for every input & output file (Status: PROPOSED, circulate Day 1).
+3. `docs/DECISIONS.md` — open questions for the lead, each with a proposed default.
 
 ## Repo state
 
 ```
-SCHEMAS.md, DECISIONS.md      docs (Day-1 contracts)
+docs/                         PRD, SCHEMAS.md, DECISIONS.md, source PDFs (Day-1 contracts; moved here from repo root)
 pyproject.toml                networkx, pandas, ortools, pytest — uv-managed
-data/toy/                     toy scenario: toy_town.graphml + 6 CSVs + README.md
+data/toy/                     toy scenario: toy_town.graphml + 6 CSVs + README.md (controlled edge cases)
+data/musi_corridor/           REAL Musi-corridor pull: musi_corridor.graphml (18k nodes) + hospitals.csv (128)
+                              [gitignored ~17MB — regenerate: uv run --with osmnx scripts/pull_osm.py]
+scripts/pull_osm.py           build-time OSM pull tool — `uv run --with osmnx scripts/pull_osm.py`
 vehicle_allocation/
   allocation.py               run_allocation(graph, pickups, vehicles, hospitals, config)
                               → {assignments, routes, unserved, summary}  [stub, body in Ch2-4]
   models.py                   dataclasses (Vehicle, Pickup, Demand, Hospital, ClosedRoad, ...) + DataLabel
-  loaders.py                  validating loaders → dataclasses; SchemaError on any contract breach
+  loaders.py                  validating loaders → dataclasses; SchemaError on any contract breach;
+                              load_graph also normalizes OSM string-typed attributes (see KNOWN_ISSUES #9)
 tests/test_smoke.py           2 passing
 tests/test_loaders.py         Chunk 1 loader tests
 ```
 
-Run: `uv sync` once, then `uv run pytest -q` (30 passing).
+Run: `uv sync` once, then `uv run pytest -q` (31 passing).
 
 ## Chunk plan — build order & status
 
@@ -67,7 +71,7 @@ Dependencies: 0 → 1 → (2, 3) → 4 → 5 → 6 → 7. Chunks 2 and 3 are par
 
 ## Don't re-litigate
 
-`DECISIONS.md` holds D1–D3 (one trip/vehicle · drive-to-pickup counts in tie-break only · no hospital capacity). Proposed defaults are active — build to them, **don't re-ask**; flip status only when the lead answers.
+`docs/DECISIONS.md` holds D1–D3 (one trip/vehicle · drive-to-pickup counts in tie-break only · no hospital capacity). Proposed defaults are active — build to them, **don't re-ask**; flip status only when the lead answers.
 
 ## Skills workflow
 
@@ -92,5 +96,8 @@ Format: one row per issue; if unresolved, say what blocks it.
 | 6 | 2026-11-26 | 1 | Nearest-node resolution is Euclidean on lon/lat degrees (no haversine/CRS) | Fine for the toy's dense grid; revisit in Ch6 if the real graph spans a wide area |
 | 7 | 2026-11-26 | 1 | Review suspected `test_pickup_neither_node_nor_latlon_rejected` passed for the wrong reason (rejected as unknown-column) | Proven **false**: the node/lat-lon form check runs *before* `_check_columns`. Test now pins the branch with `match="either"` |
 | 8 | 2026-11-26 | 1 | `data/toy/README.md` added to record *why* each pickup is placed where it is (which one demonstrates `no_route`, closure-sensitivity, demand-of-1, etc.) | Not an issue — kept so Chunks 2–5 don't have to reverse-engineer the toy's intent |
+| 9 | 2026-11-27 | 1 | **Toy→real attribute-type trap:** OSM graphml (osmnx) round-trips *every* attribute as a string (edge `length` = `'7.2086...'`); the toy's `length` was `int`. Ch2 travel-time arithmetic would pass on the toy and crash on real data | Fixed: `load_graph` now coerces `x`,`y`,`length`,`street_count`,`oneway`,`reversed` to native types (unparseable values left alone, never crash the load). Regression-tested by `test_load_graph_normalizes_string_typed_attributes` |
+| 10 | 2026-11-27 | 1 | Real data pulled **ahead of Ch6** per user (lives in Hyderabad; toy diverges "night and day" from reality): `data/musi_corridor/` = Musi river corridor bbox, 18,282 nodes / 47,066 edges (MultiDiGraph, real one-ways) + 128 hospitals (Point+Polygon → `representative_point()`). Written in lat/lon form so the loader's nearest-node resolution is exercised | Regenerate/widen: `uv run --with osmnx scripts/pull_osm.py [--bbox L B R T --out DIR --name BASE]`. **osmnx is a build-time tool only** — deliberately not a runtime dep (loaders read graphml with networkx) |
+| 11 | 2026-11-27 | 1 | Real graph has **38 weakly-connected components** (largest 18,202 + tiny pockets of 2–8 nodes) because `pull_osm.py` uses `retain_all=True` (kept deliberately — real disconnected pockets aid `no_route` realism) | If the small fragments prove noisy, re-pull with `retain_all=False` (largest component only); disconnection can then come from `closed_roads` alone |
 
 _(append new rows below; renumber)_
