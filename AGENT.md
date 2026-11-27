@@ -27,11 +27,16 @@ vehicle_allocation/
   models.py                   dataclasses (Vehicle, Pickup, Demand, Hospital, ClosedRoad, ...) + DataLabel
   loaders.py                  validating loaders → dataclasses; SchemaError on any contract breach;
                               load_graph also normalizes OSM string-typed attributes (see KNOWN_ISSUES #9)
+  travel.py                   Chunk 2: strip_closed_roads (copy; both arcs incl. all parallel; validates
+                              edge length on input graph), best_hospitals (Dijkstra per pickup → nearest
+                              by metres, no_route = None-triple), travel_min(distance_m, speed_kmh),
+                              path_distance (Ch3's D2 drive-to-pickup tie-break seam)
 tests/test_smoke.py           2 passing
 tests/test_loaders.py         Chunk 1 loader tests
+tests/test_travel.py          Chunk 2 travel tests + real-graph smoke (skips if data/musi_corridor absent)
 ```
 
-Run: `uv sync` once, then `uv run pytest -q` (31 passing).
+Run: `uv sync` once, then `uv run pytest -q` (53 passing).
 
 ## Chunk plan — build order & status
 
@@ -39,7 +44,7 @@ Run: `uv sync` once, then `uv run pytest -q` (31 passing).
 |---|-------|--------|
 | 0 | Scaffold + spec freeze (git, pyproject, SCHEMAS.md, DECISIONS.md, entrypoint contract) | ✅ done, commit `3a03693` |
 | 1 | **Toy dataset + validating loaders** — `data/toy/*` (graphml, closed_roads, pickups, demand, vehicles, hospitals, reachability) + loader that rejects bad columns and preserves `data_label`. Unblocks everything before the real graph arrives | ✅ done, commit `a45993f` |
-| 2 | Travel-time + best hospital — strip closed roads, NetworkX time per pickup→hospital, nearest wins, `no_route` if unreachable | ⬜ next (parallel with 3) |
+| 2 | Travel-time + best hospital — strip closed roads, NetworkX time per pickup→hospital, nearest wins, `no_route` if unreachable | ✅ done |
 | 3 | CP-SAT allocator — one trip/vehicle, capacity + remaining-demand caps, maximize weighted people served, min-time tiebreak; includes PRD §5 `priority_weight`/`vulnerable_count` (default 1.0/0 → plain version) | ⬜ next (parallel with 2) |
 | 4 | Routes + output layer — node path + geometry, GeoJSON/CSV, `assignments.csv`, `unserved.csv` (3 reasons), summary | ⬜ |
 | 5 | Acceptance test suite — every PRD §4 criterion as pytest | ⬜ |
@@ -99,5 +104,12 @@ Format: one row per issue; if unresolved, say what blocks it.
 | 9 | 2026-11-27 | 1 | **Toy→real attribute-type trap:** OSM graphml (osmnx) round-trips *every* attribute as a string (edge `length` = `'7.2086...'`); the toy's `length` was `int`. Ch2 travel-time arithmetic would pass on the toy and crash on real data | Fixed: `load_graph` now coerces `x`,`y`,`length`,`street_count`,`oneway`,`reversed` to native types (unparseable values left alone, never crash the load). Regression-tested by `test_load_graph_normalizes_string_typed_attributes` |
 | 10 | 2026-11-27 | 1 | Real data pulled **ahead of Ch6** per user (lives in Hyderabad; toy diverges "night and day" from reality): `data/musi_corridor/` = Musi river corridor bbox, 18,282 nodes / 47,066 edges (MultiDiGraph, real one-ways) + 128 hospitals (Point+Polygon → `representative_point()`). Written in lat/lon form so the loader's nearest-node resolution is exercised | Regenerate/widen: `uv run --with osmnx scripts/pull_osm.py [--bbox L B R T --out DIR --name BASE]`. **osmnx is a build-time tool only** — deliberately not a runtime dep (loaders read graphml with networkx) |
 | 11 | 2026-11-27 | 1 | Real graph has **38 weakly-connected components** (largest 18,202 + tiny pockets of 2–8 nodes) because `pull_osm.py` uses `retain_all=True` (kept deliberately — real disconnected pockets aid `no_route` realism) | If the small fragments prove noisy, re-pull with `retain_all=False` (largest component only); disconnection can then come from `closed_roads` alone |
+| 12 | 2026-11-27 | 2 | Ch0 `run_allocation` docstring says the caller passes the graph "closed roads already removed"; Ch2 instead strips at travel time on a copy (Ch7 needs the raw graph for both baseline AND flood runs — a pre-stripped graph can't be un-stripped) | Flagged; entrypoint untouched this chunk — fix the wording when Ch4 wires the body |
+| 13 | 2026-11-27 | 2 | `MultiDiGraph.remove_edge(u, v)` deletes only ONE parallel arc — stripping must enumerate keys or a closed road stays half-open on the real OSM graph (the DiGraph toy hides this) | Fixed + regression-tested: `test_strip_multigraph_removes_every_parallel_arc` |
+| 14 | 2026-11-27 | 2 | Best-hospital argmin is **speed-invariant** (time = length ÷ speed; speed uniform per vehicle ⇒ nearest-by-time == nearest-by-metres for every vehicle). Lead-confirmed in grill: travel.py stores metres, `travel_min()` converts per matched vehicle | Settled — Ch3/Ch4 must NOT re-derive this or build a (pickup × vehicle) time matrix |
+| 15 | 2026-11-27 | 2 | `no_route` reaches Ch2's record only as the **None-triple** (`hospital_id`/`distance_m`/`path` all `None` — lead-approved record shape); the `reason` token belongs to Ch4's `unserved.csv` enum (`no_route`\|`insufficient_fleet`\|`capacity_exhausted`) | Ch4 maps the triple → `reason="no_route"`; don't invent a second marker |
+| 16 | 2026-11-27 | 2 | Review: `PickupTravel` carries only the pickup's `data_label` — hospital/vehicle labels have no path to outputs yet | Output label rule unresolved → added DECISIONS **D4**; Ch4 must answer before writing `assignments.csv` |
+| 17 | 2026-11-27 | 2 | Reachability cross-check landed **test-only** on the toy (lead decision 2026-11-27); runtime comparison against `reachability_results.csv` still deferred — real file format unconfirmed (see #3/#4) | Test pins baseline pairs == the toy file's 8 rows; revisit the runtime check in Ch6 |
+| 18 | 2026-11-27 | 2 | Review: validating only the *stripped* graph let a bad `length` on a closed edge pass in flood mode but fail in baseline — would break Ch7's both-modes diff | Fixed: `strip_closed_roads` validates the input graph before removal; `test_bad_length_on_a_closed_edge_is_still_surfaced` pins both modes |
 
 _(append new rows below; renumber)_
