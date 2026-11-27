@@ -15,7 +15,9 @@ Context file for AI agents working on this repo. **Goal:** don't drift — pick 
 ## Repo state
 
 ```
-docs/                         PRD, SCHEMAS.md, DECISIONS.md, source PDFs (Day-1 contracts; moved here from repo root)
+docs/                         PRD, SCHEMAS.md, DECISIONS.md, PROGRESS.md (plain-language feature
+                              status snapshot — refresh its built/remaining sections when a milestone
+                              lands), source PDFs (Day-1 contracts; moved here from repo root)
 pyproject.toml                networkx, pandas, ortools, pytest — uv-managed
 data/toy/                     toy scenario: toy_town.graphml + 6 CSVs + README.md (controlled edge cases)
 data/musi_corridor/           REAL Musi-corridor pull: musi_corridor.graphml (18k nodes) + hospitals.csv (128)
@@ -60,7 +62,7 @@ Dependencies: 0 → 1 → (2, 3) → 4 → 5 → 6 → 7. Chunks 2 and 3 are par
 1. **Kickoff:** user says something like "read AGENT.md, build Chunk N" (or just "next chunk" — resolve N from the status table below).
 2. **Build** the chunk with TDD; run `uv run pytest -q` often.
 3. **Before calling it done:** run the `code-review` skill against the last commit, fix findings.
-4. **Update this file:** flip the chunk's status in the table, append anything learned to KNOWN_ISSUES (including minor quirks — especially wrong assumptions that were proven correct or false).
+4. **Update this file:** flip the chunk's status in the table, append anything learned to KNOWN_ISSUES (including minor quirks — especially wrong assumptions that were proven correct or false). If user-facing status changed, refresh the built/remaining sections of `docs/PROGRESS.md` too.
 5. **Commit** the chunk + this file update together, so `git log` = chunk history.
 
 ## Non-negotiables (from the PRD — these are where drift happens)
