@@ -12,6 +12,13 @@ from vehicle_allocation.loaders import (
     load_scenario,
     load_vehicles,
 )
+from vehicle_allocation.solver import (
+    Assignment,
+    SolveResult,
+    SolverConfig,
+    UnservedCount,
+    solve_allocation,
+)
 from vehicle_allocation.travel import (
     PickupTravel,
     best_hospitals,
@@ -21,8 +28,12 @@ from vehicle_allocation.travel import (
 )
 
 __all__ = [
+    "Assignment",
     "PickupTravel",
     "SchemaError",
+    "SolveResult",
+    "SolverConfig",
+    "UnservedCount",
     "best_hospitals",
     "load_closed_roads",
     "load_demand",
@@ -34,6 +45,7 @@ __all__ = [
     "load_vehicles",
     "path_distance",
     "run_allocation",
+    "solve_allocation",
     "strip_closed_roads",
     "travel_min",
 ]
