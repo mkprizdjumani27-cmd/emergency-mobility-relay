@@ -25,7 +25,11 @@ data/musi_corridor/           REAL Musi-corridor pull: musi_corridor.graphml (18
 scripts/pull_osm.py           build-time OSM pull tool — `uv run --with osmnx scripts/pull_osm.py`
 vehicle_allocation/
   allocation.py               run_allocation(graph, pickups, vehicles, hospitals, config)
-                              → {assignments, routes, unserved, summary}  [stub, body in Ch2-4]
+                              → {assignments, routes, unserved, summary}  [stub, body in Ch4]
+  solver.py                   Chunk 3: solve_allocation(graph, pickups, travels, demand, vehicles,
+                              config) → SolveResult{assignments, unserved, served, total_demand,
+                              vehicles_used, weighted_value, optimal}; two-phase lexicographic
+                              CP-SAT (weighted people → min trip time), D2 drive in tie-break only
   models.py                   dataclasses (Vehicle, Pickup, Demand, Hospital, ClosedRoad, ...) + DataLabel
   loaders.py                  validating loaders → dataclasses; SchemaError on any contract breach;
                               load_graph also normalizes OSM string-typed attributes (see KNOWN_ISSUES #9)
@@ -36,9 +40,11 @@ vehicle_allocation/
 tests/test_smoke.py           2 passing
 tests/test_loaders.py         Chunk 1 loader tests
 tests/test_travel.py          Chunk 2 travel tests + real-graph smoke (skips if data/musi_corridor absent)
+tests/test_solver.py          Chunk 3 solver tests (PRD §4 invariants on the toy, exact §5/D2 semantics
+                              on synthetic fixtures) + real-graph smoke (skips if data/musi_corridor absent)
 ```
 
-Run: `uv sync` once, then `uv run pytest -q` (53 passing).
+Run: `uv sync` once, then `uv run pytest -q` (80 passing).
 
 ## Chunk plan — build order & status
 
@@ -47,7 +53,7 @@ Run: `uv sync` once, then `uv run pytest -q` (53 passing).
 | 0 | Scaffold + spec freeze (git, pyproject, SCHEMAS.md, DECISIONS.md, entrypoint contract) | ✅ done, commit `3a03693` |
 | 1 | **Toy dataset + validating loaders** — `data/toy/*` (graphml, closed_roads, pickups, demand, vehicles, hospitals, reachability) + loader that rejects bad columns and preserves `data_label`. Unblocks everything before the real graph arrives | ✅ done, commit `a45993f` |
 | 2 | Travel-time + best hospital — strip closed roads, NetworkX time per pickup→hospital, nearest wins, `no_route` if unreachable | ✅ done, commit `6510814` |
-| 3 | CP-SAT allocator — one trip/vehicle, capacity + remaining-demand caps, maximize weighted people served, min-time tiebreak; includes PRD §5 `priority_weight`/`vulnerable_count` (default 1.0/0 → plain version) | ⬜ next |
+| 3 | CP-SAT allocator — one trip/vehicle, capacity + remaining-demand caps, maximize weighted people served, min-time tiebreak; includes PRD §5 `priority_weight`/`vulnerable_count` (default 1.0/0 → plain version) | ✅ done, commits `02f4816` + `83b5de6` |
 | 4 | Routes + output layer — node path + geometry, GeoJSON/CSV, `assignments.csv`, `unserved.csv` (3 reasons), summary | ⬜ |
 | 5 | Acceptance test suite — every PRD §4 criterion as pytest | ⬜ |
 | 6 | Real-data integration — swap toy for `hyderabad_drive.graphml` + real files; clean call for app integrator | ⬜ |
@@ -113,5 +119,12 @@ Format: one row per issue; if unresolved, say what blocks it.
 | 16 | 2026-11-27 | 2 | Review: `PickupTravel` carries only the pickup's `data_label` — hospital/vehicle labels have no path to outputs yet | Output label rule unresolved → added DECISIONS **D4**; Ch4 must answer before writing `assignments.csv` |
 | 17 | 2026-11-27 | 2 | Reachability cross-check landed **test-only** on the toy (lead decision 2026-11-27); runtime comparison against `reachability_results.csv` still deferred — real file format unconfirmed (see #3/#4) | Test pins baseline pairs == the toy file's 8 rows; revisit the runtime check in Ch6 |
 | 18 | 2026-11-27 | 2 | Review: validating only the *stripped* graph let a bad `length` on a closed edge pass in flood mode but fail in baseline — would break Ch7's both-modes diff | Fixed: `strip_closed_roads` validates the input graph before removal; `test_bad_length_on_a_closed_edge_is_still_surfaced` pins both modes |
+| 19 | 2026-11-28 | 3 | NetworkX has no `single_source_dijkstra_length` (Ch3 first draft used it) — the dict-returning API is `single_source_dijkstra_path_length` | Fixed in-session; solver does **one Dijkstra per vehicle start node**, not `path_distance` per (vehicle × pickup) pair (V runs instead of V×M on the real graph) |
+| 20 | 2026-11-28 | 3 | Priority weights are scaled ×1000 to CP-SAT integers: weights **below 0.001 collapse to 1 unit** (0.0001 == 0.0009, relative priority inverted in that band) | Deliberate — `_weight_units` floors at 1 so a >0 weight can never round to "worth nothing" and starve a pickup. Revisit only if sub-0.001 weights appear |
+| 21 | 2026-11-28 | 3 | `Assignment.est_travel_min` = **drive + pickup→hospital leg** (exactly the tie-break time); which legs `assignments.csv` should report is undecided — D2 says the drive counts "in the tie-break only" | Ch4 must decide before writing `assignments.csv`; both `drive_distance_m` and `hospital_distance_m` are on the record, so either reading is a one-line change |
+| 22 | 2026-11-28 | 3 | Lead rulings this session: **vulnerable seats count double** (value = `priority_weight` per passenger + one extra per vulnerable passenger, counted first on partial service; bonus configurable, default 1.0) and **12 s total solver budget** (middle of 10–15 s; phase 1 capped at 70% so the tie-break always gets ≥30%) | Recorded as DECISIONS **D5/D6** (resolved). The *lexicographic* read of PRD's "small tie-breaker" (a weighted person always beats any time saving) is my build-to-assumption, not a lead ruling → open as **D7** |
+| 23 | 2026-11-28 | 3 | The 12 s budget has **no runtime test** (a wall-clock timing test would be flaky); stage 2 failing falls back to the stage-1 solution with `optimal=False` | Accepted test gap; revisit in Ch6 if real scenarios start timing out — then add an instance-based budget test |
+| 24 | 2026-11-28 | 3 | Wrong assumption (caught by my own test): flood-mode allocations would match baseline on *unaffected* pickups — freeing p2's 22 seats legitimately shifts capacity to p4/p5 | Proven false: only p1 (demand == v1's capacity) is pinned across modes; test asserts that instead of p4/p5 equality |
+| 25 | 2026-11-28 | 3 | Review (both axes) on `02f4816`: duplicated bonus/value formula + solver setup → extracted `_bonus_units`/`_value_units`/`_new_solver` (one expression for modelled *and* reported value); PRD §4 capacity edge cases asserted only vacuously on the toy (p5 could pass while unserved) | Fixed in `83b5de6`; exact assertions in `test_capacity_edge_cases_prd_section4`. Also: `use_time_tiebreak` kept (Ch0's `run_allocation` config contract names a tie-breaker knob) and now covered |
 
 _(append new rows below; renumber)_

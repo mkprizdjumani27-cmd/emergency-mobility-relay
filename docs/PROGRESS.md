@@ -1,12 +1,13 @@
 # Progress — Vehicle Allocation Module
 
-**Snapshot: 2026-11-27.** What the module must deliver (per the PRD), what is
+**Snapshot: 2026-11-28.** What the module must deliver (per the PRD), what is
 built and verified today, what is missing, and how much is left.
 
-**TL;DR:** Input handling and hospital selection are complete and tested.
-The vehicle-assignment optimizer, route generation, output files, and the
-baseline-vs-flood report are **not started**. Roughly **a third** of the
-module is built; the optimizer is the hardest remaining piece.
+**TL;DR:** Input handling, hospital selection, and the **vehicle-assignment
+optimizer** (the hardest remaining piece) are complete and tested. Route
+generation, output files, the one-call entrypoint, and the
+baseline-vs-flood report are **not started**. Roughly **half** the module is
+built.
 
 ---
 
@@ -33,7 +34,7 @@ be served and why. Concretely, the module must:
 
 ---
 
-## Built and working (53 automated tests passing)
+## Built and working (80 automated tests passing)
 
 ### Input pipeline — complete
 
@@ -89,6 +90,32 @@ be served and why. Concretely, the module must:
   18,282-node / 47,066-edge Musi-corridor drive graph with its 128
   hospitals and 38 disconnected pockets.
 
+### Vehicle assignment optimizer — complete (core-logic step 2)
+
+- An OR-Tools CP-SAT model where each vehicle makes **at most one trip** to
+  one pickup, passengers never exceed `min(vehicle capacity, remaining
+  demand)`, and every assigned vehicle carries at least one person.
+- **Weighted people served:** each pickup's passengers count by its
+  `priority_weight`, and **vulnerable passengers count double** at their
+  pickup's weight — counted first when a pickup is only partially served
+  (lead decision, 2026-11-27). Demand rows without the optional columns
+  give the plain people-count version automatically.
+- **Travel time only ever breaks ties**, never feasibility or the main
+  objective: a second solve pins the stage-1 optimum and minimises total
+  trip time (vehicle-start → pickup → hospital, at that vehicle's speed).
+  One extra weighted person always beats any time saving.
+- A pickup with no reachable hospital never enters the model — it can only
+  appear as unserved — and a vehicle that cannot physically reach a pickup
+  (the real graph has 38 disconnected pockets) is never assigned to it.
+- Deterministic: the same inputs solve to the same result (seeded
+  single-worker solver, sorted outputs). A 12 s total budget (lead
+  decision) is split so the time tie-break always gets at least 30% of
+  it; `optimal=False` flags any run where the optimality proof was cut
+  short.
+- Proven on the toy (insufficient fleet, exact capacity fills, demand of 1,
+  baseline-vs-flood differences, label propagation) and end-to-end on the
+  real 18,282-node Musi-corridor graph.
+
 ### Test and data foundation — complete
 
 - **Toy dataset:** an 11-node town with deliberately placed edge cases —
@@ -98,43 +125,40 @@ be served and why. Concretely, the module must:
   fleet). A README records which case each fixture demonstrates.
 - **Real data, pulled ahead of need:** the Musi river corridor drive graph
   (real one-ways) and 128 hospitals, pulled from OpenStreetMap.
-- **53 automated tests** covering: schema validation, label propagation,
+- **80 automated tests** covering: schema validation, label propagation,
   closed-road removal (both directions, multigraph-safe), exact travel
   distances, `no_route` marking, baseline-vs-flood difference, a cross-check
-  of computed reachability against the known-good reachability file, and the
-  real-graph end-to-end run.
+  of computed reachability against the known-good reachability file, the
+  optimizer's capacity / one-trip-per-vehicle / weighted-objective semantics,
+  and the real-graph end-to-end runs (travel and solver).
 
 ---
 
 ## Not built yet
 
-- **Vehicle assignment — the optimizer.** The heart of the module: an
-  OR-Tools CP-SAT model where each vehicle makes at most one trip to one
-  pickup, passengers never exceed min(vehicle capacity, remaining demand),
-  the objective maximizes people served weighted by
-  `priority_weight`/`vulnerable_count`, travel time breaks ties, and the
-  drive from a vehicle's start to its pickup counts in that tie-break only.
-  Nothing of this exists yet.
 - **Route generation.** The full route per assignment (vehicle start →
   pickup → hospital) as a node path plus geometry for the map
   (GeoJSON, or CSV with a geometry column).
 - **Output files.** `assignments.csv`
   (`vehicle_id, pickup_id, hospital_id, passengers, capacity, est_travel_min,
   data_label`), `unserved.csv`
-  (`pickup_id, unserved_count, reason` with the three allowed reasons), and
-  the summary (total demand, served, unserved, vehicles used).
+  (`pickup_id, unserved_count, reason` with the three allowed reasons — the
+  solver reports per-pickup unserved *counts*, the reason enum is this
+  layer's job), and the summary (total demand, served, unserved, vehicles used).
 - **One-call entrypoint.** `run_allocation(graph, pickups, vehicles,
   hospitals, config)` exists with the agreed signature but still raises
-  `NotImplementedError` — the app integrator cannot call it yet.
-- **Acceptance test suite** — every PRD §4 criterion as a test. The current
-  suite already enforces part of four of the seven criteria at the layers
-  that exist (no closed road ever on a path; `no_route` marking; label
-  propagation into results; baseline and flood differ). The capacity,
-  insufficient-fleet, capacity-edge-case, and output-level label criteria
-  all need the optimizer and outputs first.
-- **Full real-data run.** The travel stage runs on the real graph, but a
-  complete scenario run needs the real pickup/demand/vehicle files (see
-  "Waiting on others").
+  `NotImplementedError` — the app integrator cannot call it yet. Its
+  wiring of the travel + solver layers lands with this chunk's outputs.
+- **Acceptance test suite** — every PRD §4 criterion as an explicit test.
+  Every criterion now has *some* layer enforcing it: capacity, insufficient
+  fleet, capacity edge cases, `no_route`, and the weighted objective at the
+  solver layer; no-closed-road on computed paths at the travel layer; label
+  propagation into results; baseline vs flood differ. What's left is
+  pinning them as their own criterion tests and checking the criteria
+  against the emitted output *files* — blocked on the outputs above.
+- **Full real-data run.** The travel and solver stages run on the real
+  graph, but a complete scenario run needs the real pickup/demand/vehicle
+  files (see "Waiting on others").
 - **Baseline-vs-flood comparison and report numbers** — same inputs with
   and without closures, the diff, and the report statistics. Scheduled last.
 
@@ -147,24 +171,23 @@ be served and why. Concretely, the module must:
 | Input contracts, validation, loading | **Done** |
 | Flood / baseline scenario graph handling | **Done** |
 | Travel time + best-hospital selection | **Done** |
-| Vehicle assignment optimizer | **Not started** — largest and hardest remaining piece |
-| Route generation + map geometry | **Not started** |
+| Vehicle assignment optimizer | **Done** (was the largest and hardest piece) |
+| Route generation + map geometry | **Not started** — now the largest remaining piece |
 | Output files (assignments / unserved / summary) | **Not started** |
 | One-call entrypoint for the app | Signature reserved; body **not started** |
-| Acceptance tests (PRD §4) | ~4 of 7 criteria partially covered; the rest blocked on the above |
-| Full real-data run | Travel stage proven; full run waiting on teammate files |
+| Acceptance tests (PRD §4) | Every criterion covered at some layer; dedicated per-criterion + output-file tests **blocked on outputs** |
+| Full real-data run | Travel + solver stages proven; full run waiting on teammate files |
 | Baseline-vs-flood report numbers | **Not started** (scheduled last) |
 
-**Estimate:** by feature area, inputs and scenario handling are complete
-(100%), core logic is 1 of 4 steps done, and outputs are 0% — about **a
-third of the module built**. The remaining two-thirds is the optimizer (the
-one genuinely complex piece) plus route/output plumbing, the integration
-call, and the tests that go with them.
+**Estimate:** by feature area, inputs, scenario handling, travel time, and
+the optimizer are complete, and outputs are 0% — about **half of the
+module built**. The remaining half is route/output plumbing, the integration
+call, and the acceptance tests that go with them.
 
 In PRD-schedule terms: the spec, contracts, and toy-data phase (days 1–4) is
-finished, and the first of the four core-logic steps is done. What remains is
-the days 5–10 work — solver, routes, tests, the integration call, and the
-comparison/report.
+finished, and two of the four core-logic steps (travel + assignment) are
+done. What remains is the rest of days 5–10 — routes and outputs, the
+integration call, the acceptance suite, and the comparison/report.
 
 ---
 
@@ -187,7 +210,9 @@ comparison/report.
 | D2 | Does the drive from a vehicle's start to its pickup count? | Time tie-break only |
 | D3 | Hospital capacity? | Not modeled — stated as a limitation in the report |
 | D4 | Which input's `data_label` goes on `assignments.csv` (each row mixes vehicle + pickup + hospital + demand)? | The demand row's label |
+| D7 | Tie-break: lexicographic (never trade a weighted person for time) or blended ε? | Lexicographic — my reading of "tie-breaker", not yet a lead ruling |
 | — | Short vs. long team-distribution PDF (whether `demand_points.csv` + `vehicles.csv` both exist) | Long version |
+| D5, D6 | *Resolved 2026-11-27:* §5 objective formula (vulnerable seats count double) · solver time budget (12 s total, best-found OK) | Answered — see DECISIONS.md "Resolved" |
 
 ---
 
@@ -198,7 +223,8 @@ comparison/report.
 | `vehicle_allocation/models.py` | Typed records for every input row (each carrying `data_label`) |
 | `vehicle_allocation/loaders.py` | Validating loaders + the one-call scenario loader |
 | `vehicle_allocation/travel.py` | Closed-road stripping, travel time, best-hospital selection |
+| `vehicle_allocation/solver.py` | CP-SAT allocator — assignments + unserved counts + totals (Chunk 3) |
 | `vehicle_allocation/allocation.py` | One-call entrypoint — signature reserved, body not started |
 | `data/toy/` | Toy-town scenario with the edge cases listed above |
 | `data/musi_corridor/` | Real Hyderabad Musi-corridor graph + 128 hospitals |
-| `tests/` | 53 tests: smoke, loaders, travel, real-graph end-to-end |
+| `tests/` | 80 tests: smoke, loaders, travel, solver, real-graph end-to-end |
