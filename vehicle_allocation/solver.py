@@ -5,22 +5,27 @@ small tie-breaker that minimizes travel time" — and PRD §5's optional
 priority columns, as a pure seam between Chunk 2's travel layer and Chunk 4's
 output layer.
 
-Design decisions (lead confirmed 2026-11-27):
+Design decisions:
 
 * **Two-phase lexicographic solve, never an epsilon blend.** Phase 1
   maximizes weighted people served; phase 2 re-solves with that optimum
   pinned and minimises total trip time. A blend could trade one weighted
-  person for minutes; "tie-breaker" means a person always wins. Phase 1's
-  remaining time budget carries over to phase 2 so ``time_limit_s`` bounds
-  the *whole* solve (the lead's emergency-response constraint: default 12 s,
-  middle of the proposed 10-15 s).
-* **Vulnerable seats count double.** Value of one passenger = pickup's
-  ``priority_weight``; each *vulnerable* passenger earns one extra
-  ``priority_weight`` (``vulnerable_bonus``, default 1.0 -> counts 2x) and is
-  counted first when a pickup is only partially served (capped at
-  ``vulnerable_count`` and at passengers served). Weights/bonus are integers
-  scaled x1000: a weight below 0.001 still gets 1 unit (a >0 weight can never
-  round to "worth nothing" — the solver would starve that pickup).
+  person for minutes; "tie-breaker" (PRD §2.2) means a person always wins —
+  this reading is the build-to-assumption, not a lead ruling. Time budgets:
+  phase 1 gets at most 70% of ``time_limit_s``, phase 2 the remainder
+  (carrying phase 1's unused time forward), so the tie-break always has a
+  real budget instead of whatever phase 1 happened to leave behind.
+  ``time_limit_s`` therefore bounds the *whole* solve (lead 2026-11-27:
+  default 12 s, middle of the proposed 10-15 s).
+* **Vulnerable seats count double** (lead 2026-11-27). Value of one
+  passenger = pickup's ``priority_weight``; each *vulnerable* passenger earns
+  one extra ``priority_weight`` (``vulnerable_bonus``, default 1.0 ->
+  counts 2x) and is counted first when a pickup is only partially served
+  (capped at ``vulnerable_count`` and at passengers served). Weights/bonus
+  are integers scaled x1000: a weight below 0.001 still gets 1 unit (a >0
+  weight can never round to "worth nothing" — the solver would starve that
+  pickup; consequence: weights within 0.001 of each other are
+  indistinguishable, KNOWN_ISSUES).
 * **D2: the drive from a vehicle's start to its pickup enters the time
   tie-break only** — not feasibility, not the objective's main term. The one
   exception is physical: a vehicle that cannot *reach* the pickup at all
@@ -35,9 +40,14 @@ Design decisions (lead confirmed 2026-11-27):
 * **Preconditions:** ``graph`` is the scenario graph with closed roads
   *already stripped* — the same graph ``best_hospitals`` ran on — with edge
   ``length``s validated (call :func:`vehicle_allocation.travel.strip_closed_roads`).
+  Inputs are re-checked here (duplicate ids, unknown nodes, ranges) the same
+  way ``travel.py`` guards its seam: the loaders already enforce the
+  SCHEMAS.md contract, but a seam must fail loudly rather than mis-solve.
 * **Determinism:** inputs are indexed by id, CP-SAT runs seeded with a
   single worker, and outputs are sorted, so the same scenario solves to the
-  same result. Equal optima that tie on *both* terms are still arbitrary.
+  same result. Equal optima that tie on *both* terms are still arbitrary;
+  a time-boxed real-world run that fails to finish the proof can also vary
+  run to run (``optimal=False`` flags it).
 * **``Assignment.data_label``** is the **demand** row's label (D4's proposed
   default: the carried passengers are the row's subject). D4 pending.
 * **``est_travel_min``** = drive + pickup->hospital leg at the vehicle's
@@ -79,9 +89,15 @@ _TIME_SCALE = 100
 class SolverConfig:
     """Allocator configuration (the ``config`` argument of ``run_allocation``).
 
-    ``use_priority_weight=False`` gives PRD §5's plain version (every
-    pickup counts 1.0); ``use_vulnerable_bonus=False`` / ``vulnerable_bonus``
-    turn the vulnerable-seat bonus on its head or off entirely.
+    The **plain version** of PRD §5 comes from the *inputs*: demand rows
+    without the optional columns load as ``priority_weight=1.0`` and
+    ``vulnerable_count=0``, so the objective reduces to raw people served
+    regardless of these flags. The flags are orthogonal knobs on top —
+    ``use_priority_weight=False`` ignores the weight column (every pickup
+    counts 1.0) while still honouring the vulnerable bonus, and vice versa.
+    ``use_time_tiebreak=False`` drops stage 2 (kept because Ch0's
+    ``run_allocation`` contract names a tie-breaker config knob; PRD §2.2
+    mandates the tie-break, so the default is on).
     """
 
     use_priority_weight: bool = True
@@ -126,7 +142,9 @@ class SolveResult:
 
     ``weighted_value`` is the achieved objective in weight units (the same
     scale the model maximised, divided back out) — reporting/diagnostic.
-    ``optimal`` is False only when a time limit cut the proof short.
+    ``optimal`` is False only when a time limit cut something short: the
+    stage-1 optimality proof, or stage 2 (which then falls back to the
+    stage-1 solution, i.e. an honourable-but-missing tie-break).
     """
 
     assignments: list[Assignment]
@@ -169,6 +187,39 @@ def _check_config(config: SolverConfig) -> None:
 def _weight_units(weight: float) -> int:
     """Scaled integer weight; never 0 (a >0 weight would starve the pickup)."""
     return max(1, int(round(weight * _WEIGHT_SCALE)))
+
+
+def _bonus_units(config: SolverConfig) -> int:
+    """Vulnerable-seat bonus in model units (0 when the bonus is off)."""
+    if not config.use_vulnerable_bonus:
+        return 0
+    return int(round(config.vulnerable_bonus * _WEIGHT_SCALE))
+
+
+def _value_units(
+    demand: Demand,
+    config: SolverConfig,
+    served,
+    vulnerable,
+    bonus_units: int,
+):
+    """One pickup's weighted value: ``w x (passengers + bonus x vulnerable)``.
+
+    Deliberately duck-typed over CP-SAT variables (stage-1 objective) *and*
+    plain ints (the reported ``weighted_value``): one expression means the
+    modelled objective and the reported number can never diverge.
+    """
+    w = _weight_units(demand.priority_weight) if config.use_priority_weight else _WEIGHT_SCALE
+    return w * (_WEIGHT_SCALE * served + bonus_units * vulnerable)
+
+
+def _new_solver(budget_s: float) -> cp_model.CpSolver:
+    """Seeded single-worker solver — determinism rationale lives in the module docstring."""
+    solver = cp_model.CpSolver()
+    solver.parameters.max_time_in_seconds = budget_s
+    solver.parameters.random_seed = 0
+    solver.parameters.num_search_workers = 1
+    return solver
 
 
 def _check_inputs(pickups, travels, demand, vehicles, graph) -> tuple[dict, dict, dict]:
@@ -289,16 +340,11 @@ def solve_allocation(
     }
 
     pairs = _build_pairs(graph, vehicles, pickup_by_id, travel_by_id, eligible)
+    bonus_units = _bonus_units(config)
     chosen: dict[int, int] = {}
     optimal = True
 
     if pairs:
-        bonus_units = (
-            int(round(config.vulnerable_bonus * _WEIGHT_SCALE))
-            if config.use_vulnerable_bonus
-            else 0
-        )
-
         model = cp_model.CpModel()
         assign: dict[int, cp_model.IntVar] = {}
         carry: dict[int, cp_model.IntVar] = {}
@@ -333,23 +379,21 @@ def solve_allocation(
 
         # Stage 1 objective: weighted people served (value = w x passengers
         # + one extra w per vulnerable passenger), in _VALUE_SCALE units.
-        terms = []
-        for pid in sorted(served):
-            d = eligible[pid]
-            w = _weight_units(d.priority_weight) if config.use_priority_weight else _WEIGHT_SCALE
-            terms.append(w * (_WEIGHT_SCALE * served[pid] + bonus_units * vulnerable[pid]))
-        objective = sum(terms)
+        objective = sum(
+            _value_units(eligible[pid], config, served[pid], vulnerable[pid], bonus_units)
+            for pid in sorted(served)
+        )
         model.maximize(objective)
 
+        # Phase 1 may spend at most 70% of the budget so the stage-2
+        # tie-break always gets a real share (>= 30%) instead of leftovers.
         started = time.monotonic()
-        solver = cp_model.CpSolver()
-        solver.parameters.max_time_in_seconds = config.time_limit_s
-        solver.parameters.random_seed = 0
-        solver.parameters.num_search_workers = 1  # reproducible across runs
+        phase1_budget = config.time_limit_s * 0.7
+        solver = _new_solver(phase1_budget)
         status = solver.solve(model)
         if status not in (cp_model.OPTIMAL, cp_model.FEASIBLE):
             raise RuntimeError(
-                f"CP-SAT found no solution within {config.time_limit_s:g}s "
+                f"CP-SAT found no solution within {phase1_budget:g}s "
                 f"(status: {status}); raise SolverConfig.time_limit_s"
             )
         optimal = status == cp_model.OPTIMAL
@@ -367,10 +411,7 @@ def solve_allocation(
                 )
             )
             remaining = max(0.1, config.time_limit_s - (time.monotonic() - started))
-            solver2 = cp_model.CpSolver()
-            solver2.parameters.max_time_in_seconds = remaining
-            solver2.parameters.random_seed = 0
-            solver2.parameters.num_search_workers = 1
+            solver2 = _new_solver(remaining)
             status2 = solver2.solve(model)
             if status2 in (cp_model.OPTIMAL, cp_model.FEASIBLE):
                 chosen = _read_carry(solver2, carry)
@@ -407,18 +448,14 @@ def solve_allocation(
         if d.demand_count - served_by_pid.get(pid, 0) > 0
     ]
 
-    bonus_units = (
-        int(round(config.vulnerable_bonus * _WEIGHT_SCALE))
-        if config.use_vulnerable_bonus
-        else 0
-    )
     weighted = 0
     for pid, s in served_by_pid.items():
         if not s:
             continue
         d = eligible[pid]
-        w = _weight_units(d.priority_weight) if config.use_priority_weight else _WEIGHT_SCALE
-        weighted += w * (_WEIGHT_SCALE * s + bonus_units * min(d.vulnerable_count, s))
+        # Same expression as the modelled objective (counted-first vulnerable
+        # seats are simply min(vulnerable, served) at this point).
+        weighted += _value_units(d, config, s, min(d.vulnerable_count, s), bonus_units)
 
     return SolveResult(
         assignments=assignments,

@@ -425,6 +425,42 @@ def test_hospital_leg_counts_in_the_tie_break():
     assert [a.pickup_id for a in result.assignments] == ["A"]
 
 
+def test_capacity_edge_cases_prd_section4():
+    # PRD §4: "demand exactly equal to capacity, demand of 1, and a vehicle
+    # larger than demand" — asserted exactly, not vacuously.
+    g = _bidir(("s1", "pa", 100.0), ("s2", "pb", 100.0))
+    result = _solve(
+        g,
+        [_p("A", "pa"), _p("B", "pb")],
+        [_t("A", "pa"), _t("B", "pb")],
+        [_d("A", 5), _d("B", 1)],
+        [_v("v1", "s1", 5), _v("v2", "s2", 5)],
+    )
+    assert _served_by_pickup(result) == {"A": 5, "B": 1}
+    by_vehicle = {a.vehicle_id: a.passengers for a in result.assignments}
+    assert by_vehicle["v1"] == 5  # demand exactly == capacity -> exact fill
+    assert by_vehicle["v2"] == 1  # demand of 1, vehicle larger than demand -> 1, not more
+    assert not result.unserved
+
+
+def test_tiebreak_flag_leaves_equal_value_solutions_to_stage_one():
+    # use_time_tiebreak=False skips stage 2: the stage-1 optimum (5 people)
+    # still holds, but *which* value-tied pickup gets served is arbitrary —
+    # the drive distance is not in the objective (D2), only in the tie-break.
+    g = _bidir(("v", "pa", 1000.0), ("v", "pb", 100.0))
+    result = _solve(
+        g,
+        [_p("A", "pa"), _p("B", "pb")],
+        [_t("A", "pa"), _t("B", "pb")],
+        [_d("A", 5), _d("B", 5)],
+        [_v("v1", "v", 5)],
+        use_time_tiebreak=False,
+    )
+    assert len(result.assignments) == 1
+    assert result.served == 5
+    assert result.optimal
+
+
 def test_est_travel_min_covers_drive_plus_hospital_leg():
     # 1000 m drive + 500 m to hospital at 30 km/h = 1.5 km / 30 km/h = 3 min.
     # (Ch4 writes this to assignments.csv; which legs count there is D-open.)
